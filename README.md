@@ -64,20 +64,29 @@ Download the **Encoder-Decoder Symbolic Regression model weights** **[here](http
 Extract the datasets to this directory, Feynman datasets should be in `datasets/feynman/`, and PMLB datasets should be in `datasets/pmlb/`. 
 
 ## PMLB Inference
-If your local repo uses `pmlb/datasets/`, the script below will read the dataset directly from there and perform direct end-to-end expression generation without latent space optimization.
+先用一条轻量命令验证批量直推流程和 CSV 落盘。
 
 ```bash
 source .venv/bin/activate
-python experiments/pmlb/pmlb_inference.py \
-  --reload_model ./weights/snip-e2e-sr.pth \
-  --dataset strogatz_barmag2 \
-  --max_rows 200 \
-  --beam_size 2 \
-  --max_input_points 200 \
-  --output_csv ./experiments/pmlb/results/pmlb_inference.csv
+python experiments/pmlb/pmlb_batch_inference.py \
+  --model_path ./weights/snip-e2e-sr.pth \
+  --device cuda:0 \
+  --dataset_limit 2 \
+  --max_rows 64 \
+  --max_input_points 64 \
+  --beam_size 1 \
+  --output_csv ./experiments/pmlb/results/pmlb_batch_inference_smoke.csv
 ```
 
-This command reads the first `200` rows from `pmlb/datasets/strogatz_barmag2/strogatz_barmag2.tsv.gz`, runs the pretrained model `./weights/snip-e2e-sr.pth`, and saves the predicted expression to `experiments/pmlb/results/pmlb_inference.csv`.
+正式全量批跑时直接指定权重、GPU 和输出文件即可。
+
+```bash
+source .venv/bin/activate
+python experiments/pmlb/pmlb_batch_inference.py \
+  --model_path ./weights/snip-e2e-sr.pth \
+  --device cuda:0 \
+  --output_csv ./experiments/pmlb/results/pmlb_batch_inference.csv
+```
 
 
 ## Final Results on SRBench 

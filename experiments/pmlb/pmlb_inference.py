@@ -1,9 +1,8 @@
-import time
-from pathlib import Path
-import sys
-from collections import defaultdict
 import copy
 import random
+import sys
+import time
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -15,14 +14,18 @@ import torch
 from sklearn.model_selection import train_test_split
 
 import symbolicregression
-from LSO_eval import read_file, reload_model, resolve_pmlb_dataset_root
+import symbolicregression.model.utils_wrapper as utils_wrapper
+from LSO_eval import read_file, resolve_pmlb_dataset_root
 from LSO_fit import gen2eq
 from model import SNIPSymbolicRegressor
 from parsers import get_parser
 from symbolicregression.envs import build_env
 from symbolicregression.model import build_modules
-import symbolicregression.model.utils_wrapper as utils_wrapper
 from symbolicregression.trainer import Trainer
+
+
+DEFAULT_VALIDATION_METRICS = "r2_zero,r2,_rmse,_complexity"
+DIRECT_REFINEMENT_TYPE = "direct_e2e"
 
 
 def build_inference_parser():
@@ -30,11 +33,7 @@ def build_inference_parser():
     parser.set_defaults(
         beam_size=2,
         max_input_points=200,
-        lso_optimizer="gwo",
-        lso_pop_size=50,
-        lso_max_iteration=80,
-        lso_stop_r2=0.99,
-        validation_metrics="r2_zero,r2,_rmse,_complexity",
+        validation_metrics=DEFAULT_VALIDATION_METRICS,
     )
     parser.add_argument(
         "--dataset",
@@ -61,6 +60,12 @@ def build_inference_parser():
         help="Fraction of rows used for evaluation.",
     )
     parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda:0",
+        help="Device to use: cpu, cuda, cuda:0, cuda:1, ...",
+    )
+    parser.add_argument(
         "--output_csv",
         type=str,
         default="./experiments/pmlb/results/pmlb_inference.csv",
@@ -71,7 +76,6 @@ def build_inference_parser():
 
 def configure_params(params):
     params.batch_size = 1
-    params.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if params.batch_size_eval is None:
         params.batch_size_eval = int(1.5 * params.batch_size)
 
@@ -87,15 +91,79 @@ def configure_params(params):
     params.eval_verbose_print = True
     params.rescale = True
     params.eval_only = True
+    params.validation_metrics = DEFAULT_VALIDATION_METRICS
+
     np.random.seed(params.seed)
+    random.seed(params.seed)
     torch.manual_seed(params.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(params.seed)
 
-    if not params.cpu:
-        assert torch.cuda.is_available()
+    params.device = resolve_device(params.device)
+    params.cpu = params.device.type == "cpu"
     symbolicregression.utils.CUDA = not params.cpu
     return params
+
+
+def resolve_device(device_arg):
+    device_str = str(device_arg).strip().lower()
+    if device_str == "cpu":
+        return torch.device("cpu")
+
+    if not device_str.startswith("cuda"):
+        raise ValueError(f"Unsupported device '{device_arg}'. Use cpu, cuda, or cuda:N.")
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            f"Requested device '{device_arg}', but CUDA is not available in this environment."
+        )
+
+    if device_str == "cuda":
+        torch.cuda.set_device(0)
+        return torch.device("cuda:0")
+
+    if device_str.startswith("cuda:"):
+        index_str = device_str.split(":", 1)[1]
+        if not index_str.isdigit():
+            raise ValueError(f"Invalid CUDA device '{device_arg}'. Expected cuda:N.")
+        index = int(index_str)
+        if index >= torch.cuda.device_count():
+            raise RuntimeError(
+                f"Requested device '{device_arg}', but only {torch.cuda.device_count()} CUDA device(s) are available."
+            )
+        torch.cuda.set_device(index)
+        return torch.device(f"cuda:{index}")
+
+    raise ValueError(f"Unsupported device '{device_arg}'. Use cpu, cuda, or cuda:N.")
+
+
+def load_pretrained_modules(modules, checkpoint_path, device):
+    if not checkpoint_path:
+        raise ValueError("--reload_model must point to a pretrained checkpoint.")
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    for name, module in modules.items():
+        weights = checkpoint[name]
+        if all(key.startswith("module.") for key in weights.keys()):
+            weights = {key[len("module."):]: value for key, value in weights.items()}
+        module.load_state_dict(weights)
+        module.requires_grad = False
+    return modules
+
+
+def create_inference_components(params):
+    env = build_env(params)
+    env.rng = np.random.RandomState(0)
+    checkpoint_path = params.reload_model
+    params.reload_model = ""
+    modules = build_modules(env, params)
+    params.reload_model = checkpoint_path
+    trainer = Trainer(modules, env, params)
+    trainer.modules = load_pretrained_modules(trainer.modules, params.reload_model, params.device)
+    model = SNIPSymbolicRegressor(params=params, env=env, modules=trainer.modules)
+    model.to(params.device)
+    model.eval()
+    return env, model
 
 
 def load_dataset(dataset_root, dataset_name, max_rows):
@@ -105,6 +173,29 @@ def load_dataset(dataset_root, dataset_name, max_rows):
         X = X[:max_rows]
         y = y[:max_rows]
     return X, y, feature_names, dataset_file
+
+
+def prepare_sample(X, y, test_size, random_state, rescale):
+    x_train, x_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=test_size,
+        shuffle=True,
+        random_state=random_state,
+    )
+
+    scaler = utils_wrapper.StandardScaler() if rescale else None
+    x_train_scaled = scaler.fit_transform(x_train) if scaler is not None else x_train
+
+    sample_to_learn = {
+        "X_scaled_to_fit": [x_train_scaled],
+        "Y_scaled_to_fit": [y_train.reshape(-1, 1)],
+        "x_to_fit": [x_train],
+        "y_to_fit": [y_train.reshape(-1, 1)],
+        "x_to_predict": [x_test],
+        "y_to_predict": [y_test.reshape(-1, 1)],
+    }
+    return sample_to_learn
 
 
 def build_direct_sample(sample_to_learn, max_input_points):
@@ -133,45 +224,33 @@ def run_direct_inference(sample_to_learn, env, params, model):
     return gen2eq(env, params, encoded_y, generations, sample_to_learn, stored_skeletons=[])
 
 
-def main():
-    parser = build_inference_parser()
-    params = configure_params(parser.parse_args())
-
-    dataset_root = Path(params.dataset_root) if params.dataset_root else resolve_pmlb_dataset_root()
-    X, y, feature_names, dataset_file = load_dataset(dataset_root, params.dataset, params.max_rows)
-
-    x_train, x_test, y_train, y_test = train_test_split(
-        X, y, test_size=params.test_size, shuffle=True, random_state=params.random_state
-    )
-
-    env = build_env(params)
-    env.rng = np.random.RandomState(0)
-    modules = build_modules(env, params)
-    trainer = Trainer(modules, env, params)
-    trainer.modules = reload_model(trainer.modules, params.reload_model)
-
-    model = SNIPSymbolicRegressor(params=params, env=env, modules=trainer.modules)
-    model.to(params.device)
-    model.eval()
-
-    scaler = utils_wrapper.StandardScaler() if params.rescale else None
-    if scaler is not None:
-        x_train_scaled = scaler.fit_transform(x_train)
-    else:
-        x_train_scaled = x_train
-
-    sample_to_learn = {
-        "X_scaled_to_fit": [x_train_scaled],
-        "Y_scaled_to_fit": [y_train.reshape(-1, 1)],
-        "x_to_fit": [x_train],
-        "y_to_fit": [y_train.reshape(-1, 1)],
-        "x_to_predict": [x_test],
-        "y_to_predict": [y_test.reshape(-1, 1)],
+def infer_dataset_result(dataset_root, dataset_name, env, params, model):
+    start_time = time.time()
+    result = {
+        "dataset": dataset_name,
+        "status": "error",
+        "n_features": np.nan,
+        "refinement_type": DIRECT_REFINEMENT_TYPE,
+        "r2": np.nan,
+        "rmse": np.nan,
+        "complexity": np.nan,
+        "expr": None,
+        "seconds": np.nan,
+        "error": "",
     }
 
-    start_time = time.time()
-    with torch.inference_mode():
-        try:
+    try:
+        X, y, feature_names, dataset_file = load_dataset(dataset_root, dataset_name, params.max_rows)
+        sample_to_learn = prepare_sample(
+            X=X,
+            y=y,
+            test_size=params.test_size,
+            random_state=params.random_state,
+            rescale=params.rescale,
+        )
+        result["n_features"] = len(feature_names)
+
+        with torch.inference_mode():
             (
                 success,
                 _skeleton_candidate,
@@ -184,41 +263,39 @@ def main():
                 _results_fit,
                 results_predict,
             ) = run_direct_inference(sample_to_learn, env, params, model)
-        except Exception:
-            success = False
-            predicted_tree = "NaN"
-            complexity = np.nan
-            results_predict = {}
-    runtime_sec = time.time() - start_time
 
-    expression = predicted_tree.infix() if success and predicted_tree != "NaN" else None
-    rmse = results_predict.get("_rmse", [np.nan])[0] if success else np.nan
-    r2 = results_predict.get("r2", [np.nan])[0] if success else np.nan
+        if success and predicted_tree != "NaN":
+            result["status"] = "success"
+            result["expr"] = predicted_tree.infix()
+            result["complexity"] = complexity
+            result["r2"] = results_predict.get("r2", [np.nan])[0]
+            result["rmse"] = results_predict.get("_rmse", [np.nan])[0]
+        else:
+            result["error"] = f"Failed to decode expression for {dataset_file.name}."
+    except Exception as exc:
+        result["error"] = str(exc)
 
-    result = pd.DataFrame(
-        [
-            {
-                "dataset": params.dataset,
-                "dataset_file": str(dataset_file),
-                "rows_loaded": len(X),
-                "n_features": len(feature_names),
-                "train_size": len(x_train),
-                "test_size": len(x_test),
-                "mode": "direct_e2e",
-                "expression": expression,
-                "r2": r2,
-                "rmse": rmse,
-                "complexity": complexity,
-                "runtime_sec": runtime_sec,
-            }
-        ]
-    )
+    result["seconds"] = time.time() - start_time
+    return result
 
-    output_path = Path(params.output_csv)
+
+def write_single_result(output_csv, result):
+    output_path = Path(output_csv)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    result.to_csv(output_path, index=False)
-    print(result.to_string(index=False))
-    print(f"Saved results to {output_path}")
+    pd.DataFrame([result]).to_csv(output_path, index=False)
+
+
+def main():
+    parser = build_inference_parser()
+    params = configure_params(parser.parse_args())
+
+    dataset_root = Path(params.dataset_root) if params.dataset_root else resolve_pmlb_dataset_root()
+    env, model = create_inference_components(params)
+    result = infer_dataset_result(dataset_root, params.dataset, env, params, model)
+    write_single_result(params.output_csv, result)
+
+    print(pd.DataFrame([result]).to_string(index=False))
+    print(f"Saved results to {params.output_csv}")
 
 
 if __name__ == "__main__":
