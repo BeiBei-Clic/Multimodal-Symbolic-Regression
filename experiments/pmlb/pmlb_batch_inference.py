@@ -24,9 +24,9 @@ CSV_COLUMNS = [
     "r2",
     "rmse",
     "complexity",
-    "expr",
     "seconds",
     "error",
+    "expr",
 ]
 
 

@@ -88,6 +88,15 @@ python experiments/pmlb/pmlb_batch_inference.py \
   --output_csv ./experiments/pmlb/results/pmlb_batch_inference.csv
 ```
 
+### 结果汇总
+按 Feynman/Strogatz/Black-box 分组统计。
+
+```bash
+python experiments/pmlb/pmlb_results_summary.py \
+  --input_csv ./experiments/pmlb/results/pmlb_batch_inference.csv \
+  --output_csv ./experiments/pmlb/results/pmlb_batch_inference_summary.csv
+```
+
 
 ## Final Results on SRBench 
 Our experimental results of SNIP on SRBench datasets for symbolic regression are provided in the [srbench_results/](https://github.com/deep-symbolic-mathematics/Multimodal-Symbolic-Regression/tree/main/srbench_results) directory. These results are shared to help the research community reproduce our paper's findings and serve as reference benchmarks. Each result file contains detailed performance metrics and experimental configurations used in our evaluations.
