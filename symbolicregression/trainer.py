@@ -481,6 +481,8 @@ class Trainer(object):
             else:
                 checkpoint_path = os.path.join(self.params.dump_path, path)
             if not os.path.isfile(checkpoint_path):
+                if self.params.eval_only:
+                    return
                 logger.warning(
                     "Checkpoint path does not exist, {}".format(checkpoint_path)
                 )

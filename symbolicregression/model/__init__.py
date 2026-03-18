@@ -17,6 +17,10 @@ from .model_wrapper import ModelWrapper
 logger = getLogger()
 
 
+def _get_torch_load_kwargs(params):
+    return {"map_location": torch.device("cpu")} if params.cpu else {}
+
+
 def check_model_params(params):
     """
     Check models parameters.
@@ -71,7 +75,7 @@ def build_modules(env, params):
     # reload pretrained modules
     if params.reload_model != "":
         logger.info(f"Reloading modules from {params.reload_model} ...")
-        reloaded = torch.load(params.reload_model)
+        reloaded = torch.load(params.reload_model, **_get_torch_load_kwargs(params))
         for k, v in modules.items():
             assert k in reloaded
             if all([k2.startswith("module.") for k2 in reloaded[k].keys()]):

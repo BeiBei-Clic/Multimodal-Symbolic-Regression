@@ -28,6 +28,59 @@ from tqdm import tqdm
 import copy
 
 
+def resolve_pmlb_dataset_root():
+    candidate_roots = [
+        Path("./datasets/pmlb/datasets"),
+        Path("./pmlb/datasets"),
+    ]
+    for root in candidate_roots:
+        if root.is_dir():
+            return root
+    raise FileNotFoundError(
+        "No local PMLB dataset directory found. Expected one of: "
+        "./datasets/pmlb/datasets or ./pmlb/datasets"
+    )
+
+
+def load_pmlb_summary_stats(pmlb_root):
+    legacy_summary = Path("./datasets/pmlb/pmlb/all_summary_stats.tsv")
+    if legacy_summary.is_file():
+        return pd.read_csv(legacy_summary, sep="\t")
+
+    rows = []
+    for dataset_dir in sorted(pmlb_root.iterdir()):
+        if not dataset_dir.is_dir():
+            continue
+        summary_path = dataset_dir / "summary_stats.tsv"
+        if summary_path.is_file():
+            rows.append(pd.read_csv(summary_path, sep="\t"))
+
+    if not rows:
+        raise FileNotFoundError(
+            f"No summary_stats.tsv files found under {pmlb_root}"
+        )
+    return pd.concat(rows, ignore_index=True)
+
+
+def load_feynman_formulas():
+    candidate_paths = [
+        Path("./datasets/feynman/FeynmanEquations.csv"),
+        Path("./feynman/FeynmanEquations.csv"),
+    ]
+    formula_path = next((path for path in candidate_paths if path.is_file()), None)
+    if formula_path is None:
+        return {}
+
+    feynman_problems = pd.read_csv(formula_path, delimiter=",")
+    feynman_problems = feynman_problems[["Filename", "Formula"]].dropna().values
+    feynman_formulas = {}
+    for p in range(feynman_problems.shape[0]):
+        feynman_formulas[
+            "feynman_" + feynman_problems[p][0].replace(".", "_")
+        ] = feynman_problems[p][1]
+    return feynman_formulas
+
+
 def reload_model(modules, path, requires_grad=False):
     """
     Reload a checkpoint if we find one.
@@ -36,7 +89,8 @@ def reload_model(modules, path, requires_grad=False):
         path = "checkpoint.pth"
     assert os.path.isfile(path)
 
-    data = torch.load(path)
+    map_location = torch.device("cpu") if not torch.cuda.is_available() else None
+    data = torch.load(path, map_location=map_location)
 
     # reload model parameters
     for k, v in modules.items():
@@ -96,9 +150,8 @@ def evaluate_pmlb_lso(
         model = SNIPSymbolicRegressor(params = params, env=env, modules=trainer.modules)
         model.to(params.device)
         batch_results = defaultdict(list)
-        all_datasets = pd.read_csv(
-            "./datasets/pmlb/pmlb/all_summary_stats.tsv",
-            sep="\t",)
+        pmlb_path = resolve_pmlb_dataset_root()
+        all_datasets = load_pmlb_summary_stats(pmlb_path)
         regression_datasets = all_datasets[all_datasets["task"] == "regression"]
         regression_datasets = regression_datasets[
             regression_datasets["n_categorical_features"] == 0]
@@ -108,18 +161,8 @@ def evaluate_pmlb_lso(
             problems = problems[filter_fn(problems)]
             problems = problems.loc[problems['n_features']<11]
         problem_names = problems["dataset"].values.tolist()
-        
-        pmlb_path = "./datasets/pmlb/datasets/"  # high_dim_datasets
 
-        feynman_problems = pd.read_csv(
-            "./datasets/feynman/FeynmanEquations.csv",
-            delimiter=",",)
-        feynman_problems = feynman_problems[["Filename", "Formula"]].dropna().values
-        feynman_formulas = {}
-        for p in range(feynman_problems.shape[0]):
-            feynman_formulas[
-                "feynman_" + feynman_problems[p][0].replace(".", "_")
-            ] = feynman_problems[p][1]
+        feynman_formulas = load_feynman_formulas()
         if save:
             save_file = save_suffix
         rng = np.random.RandomState(random_state)
@@ -137,7 +180,8 @@ def evaluate_pmlb_lso(
             print("GT equation : ", formula)
             print("EQ: ", problem_name)
 
-            X, y, _ = read_file(pmlb_path + "{}/{}.tsv.gz".format(problem_name, problem_name))
+            dataset_file = pmlb_path / problem_name / f"{problem_name}.tsv.gz"
+            X, y, _ = read_file(str(dataset_file))
             y = np.expand_dims(y, -1)
 
             x_to_fit, x_to_predict, y_to_fit, y_to_predict = train_test_split(
@@ -444,8 +488,6 @@ def evaluate_lso_in_domain(
 
 
 if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="1"
-    
     #load data:
     parser = get_parser()
     params = parser.parse_args()
@@ -483,7 +525,8 @@ if __name__ == '__main__':
 
     np.random.seed(params.seed)
     torch.manual_seed(params.seed)
-    torch.cuda.manual_seed(params.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(params.seed)
     
     # CPU / CUDA
     if not params.cpu:

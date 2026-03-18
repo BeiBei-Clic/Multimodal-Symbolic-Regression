@@ -36,7 +36,8 @@ def reload_model(modules, path, requires_grad=False):
         path = "checkpoint.pth"
     assert os.path.isfile(path)
 
-    data = torch.load(path)
+    map_location = torch.device("cpu") if not torch.cuda.is_available() else None
+    data = torch.load(path, map_location=map_location)
 
     # reload model parameters
     for k, v in modules.items():
@@ -277,7 +278,7 @@ def lso_fit(sample_to_learn, env, params, model,batch_results,bag_number):
             lb= torch.min(pop).item(), ub= torch.max(pop).item()
             )
 
-        pop = torch.tensor(pop,  dtype=encoded_pop.dtype).cuda()
+        pop = torch.tensor(pop, dtype=encoded_pop.dtype, device=encoded_pop.device)
         Alpha_score, Beta_score, Delta_score , Alpha_pos, Beta_pos, Delta_pos = elites
 
         print(f"Max R2 of sample at iteration {t} is {max_r2}")
@@ -543,7 +544,7 @@ class LSOFitNeverGrad():
         return self.batch_results
 
     def evaluate_pop(self, pop):
-        pop = torch.tensor(np.array(pop), dtype=torch.float32).cuda()
+        pop = torch.tensor(np.array(pop), dtype=torch.float32, device=self.params.device)
         generations_pop = self.model.generate_from_latent_sampling(pop)
         mse_pop = np.zeros(len(pop))
         r2_pop = np.zeros(len(pop))
@@ -580,7 +581,7 @@ class LSOFitNeverGrad():
 
     def evaluate_agent(self, agent):
         pop = agent.reshape(1,-1)
-        pop = torch.tensor(np.array(pop), dtype=torch.float32).cuda()
+        pop = torch.tensor(np.array(pop), dtype=torch.float32, device=self.params.device)
         generations_pop = self.model.generate_from_latent_sampling(pop)
         mse_pop = np.zeros(len(pop))
         r2_pop = np.zeros(len(pop))

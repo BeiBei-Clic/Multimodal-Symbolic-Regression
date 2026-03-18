@@ -583,7 +583,7 @@ class SNIP_TransformerModel(nn.Module):
   
         # add <EOS> to unfinished sentences
         if cur_len == max_len:
-            generated[-1].masked_fill_(unfinished_sents.byte(), self.eos_index)
+            generated[-1].masked_fill_(unfinished_sents.bool(), self.eos_index)
         # sanity check
         assert (generated == self.eos_index).sum() == 2 * bs
         generated = generated.unsqueeze(-1).view(generated.shape[0], bs)
@@ -664,7 +664,7 @@ class SNIP_TransformerModel(nn.Module):
   
         # add <EOS> to unfinished sentences
         if cur_len == max_len:
-            generated[-1].masked_fill_(unfinished_sents.byte(), self.eos_index)
+            generated[-1].masked_fill_(unfinished_sents.bool(), self.eos_index)
         # sanity check
         assert (generated == self.eos_index).sum() == 2 * bs
         generated = generated.unsqueeze(-1).view(generated.shape[0], bs)
@@ -1221,7 +1221,7 @@ class TransformerModel(nn.Module):
   
         # add <EOS> to unfinished sentences
         if cur_len == max_len:
-            generated[-1].masked_fill_(unfinished_sents.byte(), self.eos_index)
+            generated[-1].masked_fill_(unfinished_sents.bool(), self.eos_index)
         # sanity check
         assert (generated == self.eos_index).sum() == 2 * bs
         generated = generated.unsqueeze(-1).view(generated.shape[0], bs)
@@ -1303,7 +1303,7 @@ class TransformerModel(nn.Module):
   
         # add <EOS> to unfinished sentences
         if cur_len == max_len:
-            generated[-1].masked_fill_(unfinished_sents.byte(), self.eos_index)
+            generated[-1].masked_fill_(unfinished_sents.bool(), self.eos_index)
         # sanity check
         assert (generated == self.eos_index).sum() == 2 * bs
         generated = generated.unsqueeze(-1).view(generated.shape[0], bs)

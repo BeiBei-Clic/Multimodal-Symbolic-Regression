@@ -63,25 +63,21 @@ Download the **Encoder-Decoder Symbolic Regression model weights** **[here](http
       
 Extract the datasets to this directory, Feynman datasets should be in `datasets/feynman/`, and PMLB datasets should be in `datasets/pmlb/`. 
 
+## PMLB Inference
+If your local repo uses `pmlb/datasets/`, the script below will read the dataset directly from there and perform direct end-to-end expression generation without latent space optimization.
 
-## Latent Space Optimization
-As SNIP representations have strong pretrained information about potential mutual symbolic-numeric similarities, Latent Space Optimization (LSO) significantly boosts the quality of decoded equations. To run LSO for your problem, check `run_lso.sh` file. 
-
-Example of LSO run with default optimizer: 
-```
-python LSO_eval.py --reload_model ./weights/snip-e2e-sr.pth \
-                    --eval_lso_on_pmlb True \
-                    --pmlb_data_type strogatz \
-                    --target_noise 0.0 \
-                    --max_input_points 200 \
-                    --lso_optimizer gwo \
-                    --lso_pop_size 50 \
-                    --lso_max_iteration 80 \
-                    --lso_stop_r2 0.99 \
-                    --beam_size 2
+```bash
+source .venv/bin/activate
+python experiments/pmlb/pmlb_inference.py \
+  --reload_model ./weights/snip-e2e-sr.pth \
+  --dataset strogatz_barmag2 \
+  --max_rows 200 \
+  --beam_size 2 \
+  --max_input_points 200 \
+  --output_csv ./experiments/pmlb/results/pmlb_inference.csv
 ```
 
-Here, LSO is performed on the representations of the pretrained model `./weights/snip-e2e-sr.pth`. To test LSO on other data groups, you can simply change `--pmlb_data_type` parameter to `feynman` or `blackbox`. LSO algorithm is designed with the [GWO](https://www.sciencedirect.com/science/article/abs/pii/S0965997813001853) optimizer by default. However, if you're interested, you can also try other gradient-free optimizers from the **[nevergrad](https://github.com/facebookresearch/nevergrad)** library by just changing the `--lso_optimizer` parameter. 
+This command reads the first `200` rows from `pmlb/datasets/strogatz_barmag2/strogatz_barmag2.tsv.gz`, runs the pretrained model `./weights/snip-e2e-sr.pth`, and saves the predicted expression to `experiments/pmlb/results/pmlb_inference.csv`.
 
 
 ## Final Results on SRBench 
