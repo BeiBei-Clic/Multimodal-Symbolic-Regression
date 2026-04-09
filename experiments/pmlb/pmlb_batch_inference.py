@@ -2,14 +2,12 @@ import csv
 import sys
 from pathlib import Path
 
-import yaml
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from LSO_eval import load_pmlb_summary_stats
 from experiments.pmlb.pmlb_inference import (
-    DIRECT_REFINEMENT_TYPE,
     build_inference_parser,
     configure_params,
     create_inference_components,
@@ -58,23 +56,12 @@ def build_batch_parser():
     return parser
 
 
-def is_regression_dataset(dataset_dir):
-    metadata_path = dataset_dir / "metadata.yaml"
-    if not metadata_path.is_file():
-        return False
-
-    with metadata_path.open("r", encoding="utf-8") as handle:
-        metadata = yaml.safe_load(handle) or {}
-    return metadata.get("task") == "regression"
-
-
 def iter_regression_datasets(datasets_dir, dataset_limit):
-    dataset_names = []
-    for dataset_dir in sorted(datasets_dir.iterdir()):
-        if not dataset_dir.is_dir():
-            continue
-        if is_regression_dataset(dataset_dir):
-            dataset_names.append(dataset_dir.name)
+    summary_stats = load_pmlb_summary_stats(datasets_dir)
+    regression_datasets = summary_stats[summary_stats["task"] == "regression"]
+    regression_datasets = regression_datasets[regression_datasets["n_categorical_features"] == 0]
+    regression_datasets = regression_datasets[regression_datasets["n_features"] < 11]
+    dataset_names = regression_datasets["dataset"].tolist()
 
     if dataset_limit and dataset_limit > 0:
         dataset_names = dataset_names[:dataset_limit]
@@ -116,7 +103,6 @@ def main():
     env, model = create_inference_components(params)
     for dataset_name in dataset_names:
         result = infer_dataset_result(datasets_dir, dataset_name, env, params, model)
-        result["refinement_type"] = DIRECT_REFINEMENT_TYPE
         append_result(csv_path, result)
         print(
             f"[{result['status']}] {dataset_name} r2={result['r2']} rmse={result['rmse']} seconds={result['seconds']:.2f}"

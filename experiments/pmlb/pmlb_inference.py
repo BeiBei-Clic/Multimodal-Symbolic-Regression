@@ -1,7 +1,6 @@
-import copy
 import random
 import sys
-import time
+from collections import defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -16,7 +15,7 @@ from sklearn.model_selection import train_test_split
 import symbolicregression
 import symbolicregression.model.utils_wrapper as utils_wrapper
 from LSO_eval import read_file, resolve_pmlb_dataset_root
-from LSO_fit import gen2eq
+from LSO_fit import LSOFitNeverGrad, lso_fit
 from model import SNIPSymbolicRegressor
 from parsers import get_parser
 from symbolicregression.envs import build_env
@@ -25,7 +24,7 @@ from symbolicregression.trainer import Trainer
 
 
 DEFAULT_VALIDATION_METRICS = "r2_zero,r2,_rmse,_complexity"
-DIRECT_REFINEMENT_TYPE = "direct_e2e"
+DEFAULT_REFINEMENT_TYPE = "lso"
 
 
 def build_inference_parser():
@@ -33,6 +32,10 @@ def build_inference_parser():
     parser.set_defaults(
         beam_size=2,
         max_input_points=200,
+        lso_optimizer="gwo",
+        lso_pop_size=50,
+        lso_max_iteration=80,
+        lso_stop_r2=0.99,
         validation_metrics=DEFAULT_VALIDATION_METRICS,
     )
     parser.add_argument(
@@ -88,6 +91,7 @@ def configure_params(params):
     params.num_workers = 1
     params.random_state = 14423
     params.max_number_bags = 10
+    params.n_trees_to_refine = params.beam_size
     params.eval_verbose_print = True
     params.rescale = True
     params.eval_only = True
@@ -198,85 +202,39 @@ def prepare_sample(X, y, test_size, random_state, rescale):
     return sample_to_learn
 
 
-def build_direct_sample(sample_to_learn, max_input_points):
-    sub_sample = copy.deepcopy(sample_to_learn)
-
-    seq_len = len(sample_to_learn["x_to_fit"][0])
-    if seq_len >= max_input_points:
-        random_indices = random.sample(list(range(seq_len)), max_input_points)
-        sub_sample["X_scaled_to_fit"][0] = np.array([sample_to_learn["X_scaled_to_fit"][0][i] for i in random_indices])
-        sub_sample["Y_scaled_to_fit"][0] = np.array([sample_to_learn["Y_scaled_to_fit"][0][i] for i in random_indices])
-        sub_sample["x_to_fit"][0] = np.array([sample_to_learn["x_to_fit"][0][i] for i in random_indices])
-        sub_sample["y_to_fit"][0] = np.array([sample_to_learn["y_to_fit"][0][i] for i in random_indices])
-
-    seq_len = len(sample_to_learn["x_to_predict"][0])
-    if seq_len >= max_input_points:
-        random_indices = random.sample(list(range(seq_len)), max_input_points)
-        sub_sample["x_to_predict"][0] = np.array([sample_to_learn["x_to_predict"][0][i] for i in random_indices])
-        sub_sample["y_to_predict"][0] = np.array([sample_to_learn["y_to_predict"][0][i] for i in random_indices])
-
-    return sub_sample
-
-
-def run_direct_inference(sample_to_learn, env, params, model):
-    sub_sample = build_direct_sample(sample_to_learn, params.max_input_points)
-    encoded_y, generations, _ = model(sub_sample, max_len=params.max_target_len)
-    return gen2eq(env, params, encoded_y, generations, sample_to_learn, stored_skeletons=[])
+def run_lso_inference(sample_to_learn, env, params, model):
+    batch_results = defaultdict(list)
+    if params.lso_optimizer == "gwo":
+        return lso_fit(sample_to_learn, env, params, model, batch_results, 1)
+    return LSOFitNeverGrad(env, params, model, sample_to_learn, batch_results, 1).fit_func()
 
 
 def infer_dataset_result(dataset_root, dataset_name, env, params, model):
-    start_time = time.time()
-    result = {
+    X, y, feature_names, _ = load_dataset(dataset_root, dataset_name, params.max_rows)
+    sample_to_learn = prepare_sample(
+        X=X,
+        y=y,
+        test_size=params.test_size,
+        random_state=params.random_state,
+        rescale=params.rescale,
+    )
+
+    with torch.no_grad():
+        batch_results = run_lso_inference(sample_to_learn, env, params, model)
+
+    final_tree = batch_results["final_predicted_tree"][0]
+    return {
         "dataset": dataset_name,
-        "status": "error",
-        "n_features": np.nan,
-        "refinement_type": DIRECT_REFINEMENT_TYPE,
-        "r2": np.nan,
-        "rmse": np.nan,
-        "complexity": np.nan,
-        "expr": None,
-        "seconds": np.nan,
+        "status": "success",
+        "n_features": len(feature_names),
+        "refinement_type": f"{DEFAULT_REFINEMENT_TYPE}_{params.lso_optimizer}",
+        "r2": batch_results["r2_final_predict"][0],
+        "rmse": batch_results["_rmse_final_predict"][0],
+        "complexity": len(final_tree.prefix().split(",")),
+        "expr": final_tree.infix(),
+        "seconds": batch_results["time"][0],
         "error": "",
     }
-
-    try:
-        X, y, feature_names, dataset_file = load_dataset(dataset_root, dataset_name, params.max_rows)
-        sample_to_learn = prepare_sample(
-            X=X,
-            y=y,
-            test_size=params.test_size,
-            random_state=params.random_state,
-            rescale=params.rescale,
-        )
-        result["n_features"] = len(feature_names)
-
-        with torch.inference_mode():
-            (
-                success,
-                _skeleton_candidate,
-                predicted_tree,
-                complexity,
-                _y_fit,
-                _y_pred,
-                _mse_fit,
-                _mse_pred,
-                _results_fit,
-                results_predict,
-            ) = run_direct_inference(sample_to_learn, env, params, model)
-
-        if success and predicted_tree != "NaN":
-            result["status"] = "success"
-            result["expr"] = predicted_tree.infix()
-            result["complexity"] = complexity
-            result["r2"] = results_predict.get("r2", [np.nan])[0]
-            result["rmse"] = results_predict.get("_rmse", [np.nan])[0]
-        else:
-            result["error"] = f"Failed to decode expression for {dataset_file.name}."
-    except Exception as exc:
-        result["error"] = str(exc)
-
-    result["seconds"] = time.time() - start_time
-    return result
 
 
 def write_single_result(output_csv, result):
