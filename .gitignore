@@ -68,3 +68,4 @@ runs/
 Thumbs.db
 datasets
 .claude
+.codex

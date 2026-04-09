@@ -2,30 +2,20 @@ import csv
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from LSO_eval import load_pmlb_summary_stats
 from experiments.pmlb.pmlb_inference import (
+    RESULT_COLUMNS,
     build_inference_parser,
     configure_params,
     create_inference_components,
     infer_dataset_result,
 )
-
-CSV_COLUMNS = [
-    "dataset",
-    "status",
-    "n_features",
-    "refinement_type",
-    "r2",
-    "rmse",
-    "complexity",
-    "seconds",
-    "error",
-    "expr",
-]
 
 
 def build_batch_parser():
@@ -33,7 +23,7 @@ def build_batch_parser():
     parser.set_defaults(
         dataset="",
         dataset_root="./pmlb/datasets",
-        output_csv="./experiments/pmlb/results/pmlb_batch_inference.csv",
+        output_csv="",
     )
     parser.add_argument(
         "--datasets_dir",
@@ -71,15 +61,15 @@ def iter_regression_datasets(datasets_dir, dataset_limit):
 def write_header(csv_path):
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
+        writer = csv.DictWriter(handle, fieldnames=RESULT_COLUMNS)
         writer.writeheader()
         handle.flush()
 
 
 def append_result(csv_path, result):
-    row = {column: result.get(column, "") for column in CSV_COLUMNS}
+    row = {column: result.get(column, "") for column in RESULT_COLUMNS}
     with csv_path.open("a", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
+        writer = csv.DictWriter(handle, fieldnames=RESULT_COLUMNS)
         writer.writerow(row)
         handle.flush()
 
@@ -97,11 +87,30 @@ def main():
     if not dataset_names:
         raise RuntimeError(f"No regression datasets found under {datasets_dir}")
 
+    if not params.output_csv:
+        noise_tag = format(params.noise_strength, "g")
+        params.output_csv = f"./experiments/pmlb/results/pmlb_batch_inference_noise_{noise_tag}.csv"
+
     csv_path = Path(params.output_csv)
-    write_header(csv_path)
+    completed_datasets = set()
+    if csv_path.is_file() and csv_path.stat().st_size > 0:
+        existing_results = pd.read_csv(csv_path)
+        if "dataset" not in existing_results.columns:
+            raise ValueError(f"Existing output CSV is missing 'dataset' column: {csv_path}")
+        completed_datasets = set(existing_results["dataset"].dropna().astype(str))
+    else:
+        write_header(csv_path)
+
+    pending_datasets = [name for name in dataset_names if name not in completed_datasets]
+    if not pending_datasets:
+        print(f"All datasets already processed in {csv_path}")
+        return
+
+    if completed_datasets:
+        print(f"Skipping {len(dataset_names) - len(pending_datasets)} completed datasets from {csv_path}")
 
     env, model = create_inference_components(params)
-    for dataset_name in dataset_names:
+    for dataset_name in pending_datasets:
         result = infer_dataset_result(datasets_dir, dataset_name, env, params, model)
         append_result(csv_path, result)
         print(

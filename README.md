@@ -64,37 +64,59 @@ Download the **Encoder-Decoder Symbolic Regression model weights** **[here](http
 Extract the datasets to this directory, Feynman datasets should be in `datasets/feynman/`, and PMLB datasets should be in `datasets/pmlb/`. 
 
 ## PMLB Inference
-先用一条轻量命令验证批量直推流程和 CSV 落盘。
+先用一条无噪声轻量命令验证 LSO 批量推理、失败续跑和 CSV 落盘。
 
 ```bash
 source .venv/bin/activate
 python experiments/pmlb/pmlb_batch_inference.py \
   --model_path ./weights/snip-e2e-sr.pth \
   --device cuda:0 \
-  --dataset_limit 2 \
-  --max_rows 64 \
-  --max_input_points 64 \
+  --dataset_limit 1 \
+  --max_rows 32 \
+  --max_input_points 32 \
   --beam_size 1 \
-  --output_csv ./experiments/pmlb/results/pmlb_batch_inference_smoke.csv
+  --lso_pop_size 4 \
+  --lso_max_iteration 2 \
+  --noise_strength 0 \
+  --output_csv ./experiments/pmlb/results/pmlb_batch_inference_noise_0_smoke.csv
 ```
 
-正式全量批跑时直接指定权重、GPU 和输出文件即可。
+正式全量无噪声批跑时显式给出推荐的 LSO 进化算法超参数，输出文件默认写到 `experiments/pmlb/results/pmlb_batch_inference_noise_0.csv`。
 
 ```bash
 source .venv/bin/activate
 python experiments/pmlb/pmlb_batch_inference.py \
   --model_path ./weights/snip-e2e-sr.pth \
   --device cuda:0 \
-  --output_csv ./experiments/pmlb/results/pmlb_batch_inference.csv
+  --beam_size 2 \
+  --lso_optimizer gwo \
+  --lso_pop_size 50 \
+  --lso_max_iteration 80 \
+  --lso_stop_r2 0.99
+```
+
+带噪声实验只需要额外指定噪声强度，输出文件会自动写成对应的 `noise_*.csv`。
+
+```bash
+source .venv/bin/activate
+python experiments/pmlb/pmlb_batch_inference.py \
+  --model_path ./weights/snip-e2e-sr.pth \
+  --device cuda:0 \
+  --beam_size 2 \
+  --lso_optimizer gwo \
+  --lso_pop_size 50 \
+  --lso_max_iteration 80 \
+  --lso_stop_r2 0.99 \
+  --noise_strength 0.1
 ```
 
 ### 结果汇总
-按 Feynman/Strogatz/Black-box 分组统计。
+按 Feynman/Strogatz/Black-box 分组统计无噪声结果；带噪声实验时把输入 CSV 改成对应的 `noise_*.csv` 文件即可。
 
 ```bash
 python experiments/pmlb/pmlb_results_summary.py \
-  --input_csv ./experiments/pmlb/results/pmlb_batch_inference.csv \
-  --output_csv ./experiments/pmlb/results/pmlb_batch_inference_summary.csv
+  --input_csv ./experiments/pmlb/results/pmlb_batch_inference_noise_0.csv \
+  --output_csv ./experiments/pmlb/results/pmlb_batch_inference_noise_0_summary.csv
 ```
 
 

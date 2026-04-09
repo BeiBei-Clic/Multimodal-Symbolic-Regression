@@ -25,6 +25,19 @@ from symbolicregression.trainer import Trainer
 
 DEFAULT_VALIDATION_METRICS = "r2_zero,r2,_rmse,_complexity"
 DEFAULT_REFINEMENT_TYPE = "lso"
+RESULT_COLUMNS = [
+    "dataset",
+    "status",
+    "n_features",
+    "refinement_type",
+    "r2",
+    "rmse",
+    "complexity",
+    "seconds",
+    "error",
+    "noise_strength",
+    "expr",
+]
 
 
 def build_inference_parser():
@@ -74,10 +87,25 @@ def build_inference_parser():
         default="./experiments/pmlb/results/pmlb_inference.csv",
         help="Where to save the inference result CSV.",
     )
+    parser.add_argument(
+        "--noise_strength",
+        type=float,
+        default=0.0,
+        help="Multiplicative Gaussian noise strength applied to training targets.",
+    )
+    parser.add_argument(
+        "--noise_seed",
+        type=int,
+        default=0,
+        help="Random seed used when injecting target noise.",
+    )
     return parser
 
 
 def configure_params(params):
+    if params.noise_strength < 0:
+        raise ValueError(f"noise_strength must be non-negative, got {params.noise_strength}.")
+
     params.batch_size = 1
     if params.batch_size_eval is None:
         params.batch_size_eval = int(1.5 * params.batch_size)
@@ -179,7 +207,7 @@ def load_dataset(dataset_root, dataset_name, max_rows):
     return X, y, feature_names, dataset_file
 
 
-def prepare_sample(X, y, test_size, random_state, rescale):
+def prepare_sample(X, y, test_size, random_state, rescale, noise_strength, noise_seed):
     x_train, x_test, y_train, y_test = train_test_split(
         X,
         y,
@@ -187,6 +215,11 @@ def prepare_sample(X, y, test_size, random_state, rescale):
         shuffle=True,
         random_state=random_state,
     )
+
+    if noise_strength > 0:
+        rng = np.random.RandomState(noise_seed)
+        noise = rng.normal(0, noise_strength, size=y_train.shape)
+        y_train = y_train * (1 + noise)
 
     scaler = utils_wrapper.StandardScaler() if rescale else None
     x_train_scaled = scaler.fit_transform(x_train) if scaler is not None else x_train
@@ -210,37 +243,53 @@ def run_lso_inference(sample_to_learn, env, params, model):
 
 
 def infer_dataset_result(dataset_root, dataset_name, env, params, model):
-    X, y, feature_names, _ = load_dataset(dataset_root, dataset_name, params.max_rows)
-    sample_to_learn = prepare_sample(
-        X=X,
-        y=y,
-        test_size=params.test_size,
-        random_state=params.random_state,
-        rescale=params.rescale,
-    )
-
-    with torch.no_grad():
-        batch_results = run_lso_inference(sample_to_learn, env, params, model)
-
-    final_tree = batch_results["final_predicted_tree"][0]
-    return {
+    result = {
         "dataset": dataset_name,
-        "status": "success",
-        "n_features": len(feature_names),
+        "status": "error",
+        "n_features": np.nan,
         "refinement_type": f"{DEFAULT_REFINEMENT_TYPE}_{params.lso_optimizer}",
-        "r2": batch_results["r2_final_predict"][0],
-        "rmse": batch_results["_rmse_final_predict"][0],
-        "complexity": len(final_tree.prefix().split(",")),
-        "expr": final_tree.infix(),
-        "seconds": batch_results["time"][0],
+        "r2": np.nan,
+        "rmse": np.nan,
+        "complexity": np.nan,
+        "seconds": np.nan,
         "error": "",
+        "noise_strength": params.noise_strength,
+        "expr": "",
     }
+
+    try:
+        X, y, feature_names, _ = load_dataset(dataset_root, dataset_name, params.max_rows)
+        sample_to_learn = prepare_sample(
+            X=X,
+            y=y,
+            test_size=params.test_size,
+            random_state=params.random_state,
+            rescale=params.rescale,
+            noise_strength=params.noise_strength,
+            noise_seed=params.noise_seed,
+        )
+
+        with torch.no_grad():
+            batch_results = run_lso_inference(sample_to_learn, env, params, model)
+
+        final_tree = batch_results["final_predicted_tree"][0]
+        result["status"] = "success"
+        result["n_features"] = len(feature_names)
+        result["r2"] = batch_results["r2_final_predict"][0]
+        result["rmse"] = batch_results["_rmse_final_predict"][0]
+        result["complexity"] = len(final_tree.prefix().split(","))
+        result["seconds"] = batch_results["time"][0]
+        result["expr"] = final_tree.infix()
+    except Exception as exc:
+        result["error"] = str(exc)
+
+    return result
 
 
 def write_single_result(output_csv, result):
     output_path = Path(output_csv)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([result]).to_csv(output_path, index=False)
+    pd.DataFrame([result], columns=RESULT_COLUMNS).to_csv(output_path, index=False)
 
 
 def main():
