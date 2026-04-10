@@ -111,12 +111,12 @@ python experiments/pmlb/pmlb_batch_inference.py \
 ```
 
 ### 结果汇总
-按 Feynman/Strogatz/Black-box 分组统计无噪声结果；带噪声实验时把输入 CSV 改成对应的 `noise_*.csv` 文件即可。
+一次合并四种噪声强度的结果，并按 Feynman/Strogatz/Black-box 三组输出总汇总 CSV。
 
 ```bash
-python experiments/pmlb/pmlb_results_summary.py \
-  --input_csv ./experiments/pmlb/results/pmlb_batch_inference_noise_0.csv \
-  --output_csv ./experiments/pmlb/results/pmlb_batch_inference_noise_0_summary.csv
+PYTHONPATH=. .venv/bin/python experiments/pmlb/pmlb_results_summary.py \
+  --input_csvs ./experiments/pmlb/results/pmlb_batch_inference_noise_0.csv ./experiments/pmlb/results/pmlb_batch_inference_noise_0.001.csv ./experiments/pmlb/results/pmlb_batch_inference_noise_0.01.csv ./experiments/pmlb/results/pmlb_batch_inference_noise_0.1.csv \
+  --output_csv ./experiments/pmlb/results/pmlb_results_summary.csv
 ```
 
 
