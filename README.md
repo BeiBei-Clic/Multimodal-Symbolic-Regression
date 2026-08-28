@@ -119,6 +119,13 @@ PYTHONPATH=. .venv/bin/python experiments/pmlb/pmlb_results_summary.py \
   --output_csv ./experiments/pmlb/results/pmlb_results_summary.csv
 ```
 
+提取 SNIP_results 中 Strogatz 数据集的全部结果到单独 CSV，并打印 r2>0.99 比例。
+
+```bash
+PYTHONPATH=. .venv/bin/python experiments/pmlb/strogatz_extract.py \
+  --output_csv ./experiments/pmlb/SNIP_results/strogatz_results.csv
+```
+
 
 ## Final Results on SRBench 
 Our experimental results of SNIP on SRBench datasets for symbolic regression are provided in the [srbench_results/](https://github.com/deep-symbolic-mathematics/Multimodal-Symbolic-Regression/tree/main/srbench_results) directory. These results are shared to help the research community reproduce our paper's findings and serve as reference benchmarks. Each result file contains detailed performance metrics and experimental configurations used in our evaluations.
